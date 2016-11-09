@@ -27,7 +27,7 @@ class DosDetector
 
       # time initialized
       diff = 0 if prev == 0
-      {:file => @r.filename, :time_diff => diff, :counter => cnt, :counter_key => @counter_key}
+      {:time_diff => diff, :counter => cnt, :counter_key => @counter_key}
     else
       nil
     end
