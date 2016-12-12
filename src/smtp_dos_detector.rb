@@ -1,11 +1,14 @@
 global_mutex = Mutex.new :global => true
 
 class DosDetector
+  attr_accessor :now
+
   def initialize config
     @cache = Cache.new :namespace => "smtp_dos_detector"
     @config = config
     @now = Time.now.to_i
     @counter_key = config[:counter_key].to_s
+    config[:magic_str] ||= "...."
     @counter_key_time = "#{@counter_key}_#{config[:magic_str]}_time"
     @data = self._analyze
 
@@ -17,20 +20,15 @@ class DosDetector
   end
 
   def _analyze
-    unless @counter_key.nil?
-      cnt = @cache[@counter_key]
-      cnt = cnt.to_i
+    return nil if @counter_key.nil?
 
-      # counter time when initialized counter
-      prev = @cache[@counter_key_time].to_i
-      diff = @now - prev
+    # counter time when initialized counter
+    prev = @cache[@counter_key_time].to_i
+    diff = @now - prev
 
-      # time initialized
-      diff = 0 if prev == 0
-      {:time_diff => diff, :counter => cnt, :counter_key => @counter_key}
-    else
-      nil
-    end
+    # time initialized
+    diff = 0 if prev.zero?
+    {:time_diff => diff, :counter => @cache[@counter_key].to_i, :counter_key => @counter_key}
   end
 
   def init_cache data
@@ -40,11 +38,10 @@ class DosDetector
 
   def update_cache counter, date
     @cache[@counter_key] = (counter + 1).to_s
-    @cache[@counter_key_time] =  date.to_s
+    @cache[@counter_key_time] = date.to_s
   end
 
   def detect? data=nil
- 
     # run anlyze when data is nothing
     data = self.analyze if data.nil?
     return false if data.nil?
@@ -56,25 +53,20 @@ class DosDetector
     cnt = data[:counter]
     diff = data[:time_diff]
 
+    # When the number of e-mails over a certain time exceeds the threshold
     if cnt >= thr
-      if 0 <= diff && diff < thr_time
-        true
-      else
-        false
-      end
+      # And continuously If you are sending an email
+      # (The time difference between the previous and current send times exceeds the threshold)
+      0 <= diff && diff < thr_time ? true : false
     elsif cnt < 0
-      if diff > expire
-        false
-      else
-        true
-      end
+      # Is the counter expired?
+      diff > expire ? false : true
     else
       false
     end
   end
 
   def _detect data=nil
-
     # run anlyze when data is nothing
     data = self.analyze if data.nil?
     return false if data.nil?
@@ -105,32 +97,26 @@ end
 target = Pmilter::Session.new.client_ipaddr
 
 config = {
-  :counter_key => target,
-  :magic_str => "....",
-
-  :behind_counter => -50,
-
-  :threshold_counter => 1,
-  :threshold_time => 1,
-
-  :expire_time => 5,
+  :counter_key       => target,
+  :threshold_time    => 10,
+  :threshold_counter => 5,
+  :expire_time       => 30,
+  :behind_counter    => -10,
 }
 
 timeout = global_mutex.try_lock_loop(50000) do
   dos = DosDetector.new config
   data = dos.analyze
-  p "dos_detetor: detect dos: #{data}"
+  p "smtp-dos-detector: analyze: #{data}"
   begin
     if dos.detect?
-      p "dos_detetor: detect dos: #{data}"
+      p "smtp-dos-detector: detect: #{data}"
       Pmilter.status = Pmilter::SMFIS_REJECT
     end
   rescue => e
-    raise "DosDetector failed: #{e}"
+    raise "smtp-dos-detector: fail: #{e}"
   ensure
     global_mutex.unlock
   end
 end
-if timeout
-  p "dos_detetor: get timeout mutex lock, #{data}"
-end
+p "smtp-dos-detector: get timeout mutex lock, #{data}" if timeout
